@@ -143,93 +143,156 @@ def validate_url(url):
         return False
 
 def search_manual_online(product_name, model=None):
-    """Search for manuals online using multiple sources with validation"""
+    """Enhanced search for manuals with multiple sources and strategies"""
     search_results = []
-    query = f"{product_name} manual"
-    if model:
-        query += f" {model}"
     
-    # Define multiple search sources
+    # Create multiple query variations for better results
+    base_queries = []
+    if model:
+        base_queries = [
+            f"{product_name} {model} manual",
+            f"{product_name} {model} user guide", 
+            f"{product_name} {model} instruction manual",
+            f'"{product_name}" "{model}" manual',
+            f"{product_name} {model} owner manual pdf"
+        ]
+    else:
+        base_queries = [
+            f"{product_name} manual",
+            f"{product_name} user guide",
+            f"{product_name} instruction manual",
+            f'"{product_name}" manual pdf'
+        ]
+    
+    # Define enhanced search sources with multiple sites
     search_sources = [
         {
             'name': 'ManualsLib',
-            'search_url': f"https://www.manualslib.com/search/{quote(query)}",
-            'direct_search': False
+            'base_url': 'https://www.manualslib.com/search/',
+            'type': 'manual_site'
         },
         {
-            'name': 'Google Search',
-            'search_url': f"https://www.google.com/search?q={quote(query + ' filetype:pdf')}",
-            'direct_search': False
+            'name': 'Manualzilla',
+            'base_url': 'https://manualzilla.com/search?q=',
+            'type': 'manual_site'
+        },
+        {
+            'name': 'ManualsOnline',
+            'base_url': 'https://www.manualsonline.com/search?q=',
+            'type': 'manual_site'
         }
     ]
     
-    for source in search_sources:
-        try:
-            # First, validate the search URL
-            if not validate_url(source['search_url']):
-                continue
+    # Try each query with each source for maximum coverage
+    for query in base_queries[:3]:  # Limit to prevent too many requests
+        for source in search_sources:
+            try:
+                # Build search URL
+                search_url = source['base_url'] + quote(query)
                 
-            # Fetch the search page
-            downloaded = trafilatura.fetch_url(source['search_url'])
-            if not downloaded:
-                continue
-            
-            # Extract content from the search page
-            text = trafilatura.extract(downloaded)
-            if not text or len(text.strip()) < 50:
-                continue
-            
-            # For ManualsLib, try to find actual manual links
-            if 'manualslib' in source['search_url'].lower():
-                # Look for manual links in the page
-                from bs4 import BeautifulSoup
-                soup = BeautifulSoup(downloaded, 'html.parser')
-                manual_links = []
+                # Validate the search URL first
+                if not validate_url(search_url):
+                    continue
+                    
+                # Fetch the search page
+                downloaded = trafilatura.fetch_url(search_url)
+                if not downloaded:
+                    continue
                 
-                # Find manual result links
-                for link in soup.find_all('a', href=True):
-                    href = link.get('href')
-                    if href and isinstance(href, str) and ('/manual/' in href or 'manual' in href.lower()):
-                        if href.startswith('/'):
-                            href = f"https://www.manualslib.com{href}"
-                        elif not href.startswith('http'):
-                            href = f"https://www.manualslib.com/{href}"
-                        
-                        # Validate the manual link
-                        if validate_url(href):
-                            manual_links.append(href)
-                            if len(manual_links) >= 1:  # Get first valid manual
-                                break
+                # Try to parse with BeautifulSoup for better manual link extraction
+                try:
+                    from bs4 import BeautifulSoup
+                    soup = BeautifulSoup(downloaded, 'html.parser')
+                    manual_links = []
+                    
+                    # Enhanced link finding for different manual sites
+                    if 'manualslib' in search_url.lower():
+                        # ManualsLib specific patterns
+                        for link in soup.find_all('a', href=True):
+                            href = link.get('href')
+                            if href and isinstance(href, str):
+                                if '/manual/' in href or '/view/' in href:
+                                    if href.startswith('/'):
+                                        href = f"https://www.manualslib.com{href}"
+                                    elif not href.startswith('http'):
+                                        href = f"https://www.manualslib.com/{href}"
+                                    
+                                    # Get title from link text or nearby text
+                                    title = link.get_text(strip=True)
+                                    if not title:
+                                        # Try parent or sibling elements for title
+                                        parent = link.parent
+                                        if parent:
+                                            title = parent.get_text(strip=True)[:100]
+                                    
+                                    if title and len(title) > 10:
+                                        manual_links.append({
+                                            'url': href,
+                                            'title': title,
+                                            'source': source['name']
+                                        })
+                    
+                    elif 'manualzilla' in search_url.lower() or 'manualsonline' in search_url.lower():
+                        # Generic manual site patterns
+                        for link in soup.find_all('a', href=True):
+                            href = link.get('href')
+                            if href and isinstance(href, str):
+                                # Look for PDF links or manual pages
+                                if (href.endswith('.pdf') or 
+                                    'manual' in href.lower() or 
+                                    'download' in href.lower()):
+                                    
+                                    if not href.startswith('http'):
+                                        # Build full URL based on source
+                                        if 'manualzilla' in search_url.lower():
+                                            href = f"https://manualzilla.com{href}"
+                                        elif 'manualsonline' in search_url.lower():
+                                            href = f"https://www.manualsonline.com{href}"
+                                    
+                                    title = link.get_text(strip=True)
+                                    if title and len(title) > 8:
+                                        manual_links.append({
+                                            'url': href,
+                                            'title': title,
+                                            'source': source['name']
+                                        })
+                    
+                    # Validate and extract content from found manual links
+                    for manual in manual_links[:2]:  # Check top 2 results per source
+                        if validate_url(manual['url']):
+                            try:
+                                manual_content = trafilatura.fetch_url(manual['url'])
+                                if manual_content:
+                                    manual_text = trafilatura.extract(manual_content)
+                                    if manual_text and len(manual_text.strip()) > 200:
+                                        return {
+                                            'success': True,
+                                            'content': manual_text[:8000],  # More content
+                                            'source_url': manual['url'],
+                                            'search_query': query,
+                                            'source_name': manual['source'],
+                                            'title': manual['title']
+                                        }
+                            except Exception:
+                                continue
                 
-                # If we found valid manual links, try to get the actual manual content
-                for manual_url in manual_links[:1]:  # Try first valid link
-                    try:
-                        manual_content = trafilatura.fetch_url(manual_url)
-                        if manual_content:
-                            manual_text = trafilatura.extract(manual_content)
-                            if manual_text and len(manual_text.strip()) > 100:
-                                return {
-                                    'success': True,
-                                    'content': manual_text[:5000],  # Get more content
-                                    'source_url': manual_url,
-                                    'search_query': query,
-                                    'source_name': source['name']
-                                }
-                    except Exception as e:
-                        continue
-            
-            # Fallback: return search results if no direct manual found
-            if len(text.strip()) > 100:
-                search_results.append({
-                    'success': True,
-                    'content': text[:3000],
-                    'source_url': source['search_url'],
-                    'search_query': query,
-                    'source_name': source['name']
-                })
-        
-        except Exception as e:
-            continue
+                except ImportError:
+                    # Fallback if BeautifulSoup not available
+                    text = trafilatura.extract(downloaded)
+                    if text and len(text.strip()) > 100:
+                        search_results.append({
+                            'success': True,
+                            'content': text[:4000],
+                            'source_url': search_url,
+                            'search_query': query,
+                            'source_name': source['name']
+                        })
+                
+                except Exception:
+                    continue
+                    
+            except Exception:
+                continue
     
     # Return best result if any found
     if search_results:
@@ -532,86 +595,133 @@ def main():
         st.caption("Let the app search the web for manuals automatically")
         
         with st.form("auto_find_form"):
-            col1, col2 = st.columns([2, 1])
-            
-            with col1:
-                product_name = st.text_input(
-                    "Product Name *",
-                    placeholder="e.g., Samsung TV, Toyota Camry, iPhone",
-                    help="Enter the product name you need a manual for"
-                )
-            
-            with col2:
-                model_number = st.text_input(
-                    "Model Number",
-                    placeholder="e.g., UN55TU8000",
-                    help="Optional: Enter model number for better results"
-                )
-            
-            category = st.selectbox(
-                "Category",
-                options=[cat for cat in CATEGORIES if cat != "All"],
-                index=9,  # Default to "Other" (index 9 in filtered list)
-                help="Select the category for this product"
+            # Enhanced input with better layout
+            product_name = st.text_input(
+                "🔍 Product Name *",
+                placeholder="e.g., Samsung UN65TU8000, Honda Civic 2020, iPhone 13 Pro",
+                help="Be specific: include brand and model for best results"
             )
             
-            find_button = st.form_submit_button("🔍 Search for Manual", use_container_width=True)
+            col1, col2 = st.columns([1, 1])
+            with col1:
+                model_number = st.text_input(
+                    "📋 Model Number (Optional)",
+                    placeholder="e.g., UN65TU8000, KSM150PSER",
+                    help="Model numbers greatly improve search accuracy"
+                )
+            with col2:
+                category = st.selectbox(
+                    "📁 Category",
+                    options=[cat for cat in CATEGORIES if cat != "All"],
+                    index=9,  # Default to "Other"
+                    help="Select the product category"
+                )
             
-            if find_button:
+            # Quick suggestion examples
+            st.caption("💡 **Best Results Examples:** Samsung UN65TU8000 • Honda Civic 2020 • KitchenAid KSM150PSER • iPhone 13 Pro")
+            
+            # Enhanced search options
+            col1, col2, col3 = st.columns([1, 1, 1])
+            with col1:
+                find_button = st.form_submit_button("🔍 Quick Search", use_container_width=True)
+            with col2:
+                smart_search = st.form_submit_button("🎯 Smart Search", use_container_width=True, help="Try multiple search variations")
+            with col3:
+                preview_only = st.form_submit_button("👁️ Preview Only", use_container_width=True, help="Find and preview without saving")
+            
+            if find_button or smart_search or preview_only:
                 if product_name.strip():
-                    with st.spinner(f"Searching the web for {product_name} manual..."):
-                        result = auto_find_and_add_manual(
-                            product_name.strip(), 
-                            model_number.strip() if model_number.strip() else None,
-                            category
-                        )
-                        
-                        if result['success']:
-                            st.success(f"✅ {result['message']}")
-                            st.balloons()
-                            # Show preview of found manual with link validation
-                            with st.expander("📖 Preview of Found Manual", expanded=True):
-                                manual = result['manual']
-                                st.write(f"**Title:** {manual['title']}")
-                                st.write(f"**Category:** {manual['category']}")
-                                
-                                # Show source with validation status
-                                source_url = manual.get('source_url', 'N/A')
-                                if source_url != 'N/A':
-                                    # Validate the link in real-time
-                                    with st.spinner("Validating source link..."):
-                                        is_valid = validate_url(source_url)
+                    search_type = "Smart Search" if smart_search else "Preview" if preview_only else "Quick Search"
+                    with st.spinner(f"{search_type}: Searching for {product_name} manual..."):
+                        if preview_only:
+                            # Just search without saving
+                            search_result = search_manual_online(
+                                product_name.strip(),
+                                model_number.strip() if model_number.strip() else None
+                            )
+                            
+                            if search_result['success']:
+                                st.success("✅ Manual found! Preview below:")
+                                with st.expander("📖 Manual Preview", expanded=True):
+                                    st.write(f"**Title:** {search_result.get('title', product_name)}")
+                                    st.write(f"**Source:** {search_result.get('source_name', 'Unknown')}")
+                                    if search_result.get('source_url'):
+                                        st.write(f"**Link:** [View Original]({search_result['source_url']})")
                                     
-                                    if is_valid:
-                                        st.write(f"**Source:** ✅ [Valid Link]({source_url})")
-                                        st.success("Source link is accessible and valid")
-                                    else:
-                                        st.write(f"**Source:** ❌ Link may be inaccessible")
-                                        st.warning("Source link validation failed - content was cached during search")
-                                else:
-                                    st.write(f"**Source:** {source_url}")
-                                
-                                # Show source name if available
-                                if manual.get('source_name'):
-                                    st.write(f"**Search Engine:** {manual.get('source_name')}")
-                                
-                                st.text_area(
-                                    "Content Preview:",
-                                    manual['content'][:800] + "..." if len(manual['content']) > 800 else manual['content'],
-                                    height=300,
-                                    disabled=True
-                                )
-                                
-                                # Show content quality indicators
-                                content_length = len(manual['content'])
-                                if content_length > 1000:
-                                    st.info(f"📊 High-quality manual found ({content_length:,} characters)")
-                                elif content_length > 500:
-                                    st.info(f"📊 Medium-quality manual found ({content_length:,} characters)")
-                                else:
-                                    st.warning(f"📊 Limited content found ({content_length:,} characters) - try different search terms")
+                                    content = search_result['content']
+                                    st.text_area(
+                                        "Content Preview:",
+                                        content[:1000] + "..." if len(content) > 1000 else content,
+                                        height=300,
+                                        disabled=True
+                                    )
+                                    
+                                    # Option to save after preview
+                                    if st.button("💾 Save This Manual", use_container_width=True):
+                                        save_result = auto_find_and_add_manual(
+                                            product_name.strip(),
+                                            model_number.strip() if model_number.strip() else None,
+                                            category
+                                        )
+                                        if save_result['success']:
+                                            st.success("✅ Manual saved successfully!")
+                                            st.rerun()
+                            else:
+                                st.error(f"❌ {search_result.get('error', 'No manual found')}")
                         else:
-                            st.error(f"❌ {result['message']}")
+                            # Regular search and save
+                            result = auto_find_and_add_manual(
+                                product_name.strip(), 
+                                model_number.strip() if model_number.strip() else None,
+                                category
+                            )
+                            
+                            if result['success']:
+                                st.success(f"✅ {result['message']}")
+                                st.balloons()
+                                # Show preview of found manual with link validation
+                                with st.expander("📖 Preview of Found Manual", expanded=True):
+                                    manual = result['manual']
+                                    st.write(f"**Title:** {manual['title']}")
+                                    st.write(f"**Category:** {manual['category']}")
+                                    
+                                    # Show source with validation status
+                                    source_url = manual.get('source_url', 'N/A')
+                                    if source_url != 'N/A':
+                                        # Validate the link in real-time
+                                        with st.spinner("Validating source link..."):
+                                            is_valid = validate_url(source_url)
+                                        
+                                        if is_valid:
+                                            st.write(f"**Source:** ✅ [Valid Link]({source_url})")
+                                            st.success("Source link is accessible and valid")
+                                        else:
+                                            st.write(f"**Source:** ❌ Link may be inaccessible")
+                                            st.warning("Source link validation failed - content was cached during search")
+                                    else:
+                                        st.write(f"**Source:** {source_url}")
+                                    
+                                    # Show source name if available
+                                    if manual.get('source_name'):
+                                        st.write(f"**Search Engine:** {manual.get('source_name')}")
+                                    
+                                    st.text_area(
+                                        "Content Preview:",
+                                        manual['content'][:800] + "..." if len(manual['content']) > 800 else manual['content'],
+                                        height=300,
+                                        disabled=True
+                                    )
+                                    
+                                    # Show content quality indicators
+                                    content_length = len(manual['content'])
+                                    if content_length > 1000:
+                                        st.info(f"📊 High-quality manual found ({content_length:,} characters)")
+                                    elif content_length > 500:
+                                        st.info(f"📊 Medium-quality manual found ({content_length:,} characters)")
+                                    else:
+                                        st.warning(f"📊 Limited content found ({content_length:,} characters) - try different search terms")
+                            else:
+                                st.error(f"❌ {result['message']}")
                             # Provide more specific guidance based on the error
                             with st.expander("💡 Troubleshooting Tips"):
                                 st.markdown("""
@@ -647,6 +757,56 @@ def main():
                     st.error("❌ Please enter a product name to search for.")
         
         st.divider()
+        
+        # Instant Manual Suggestions
+        with st.expander("⚡ Instant Manual Suggestions", expanded=False):
+            st.markdown("**Popular Manual Categories:**")
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                if st.button("📱 iPhone 13 Pro", key="suggest_iphone"):
+                    st.session_state.suggested_product = "iPhone 13 Pro"
+                    st.session_state.suggested_model = ""
+                    st.session_state.suggested_category = "Electronics"
+                if st.button("🏠 Nest Thermostat", key="suggest_nest"):
+                    st.session_state.suggested_product = "Google Nest Thermostat"
+                    st.session_state.suggested_model = "3rd Gen"
+                    st.session_state.suggested_category = "Home & Garden"
+            
+            with col2:
+                if st.button("📺 Samsung TV", key="suggest_samsung"):
+                    st.session_state.suggested_product = "Samsung TV"
+                    st.session_state.suggested_model = "UN65TU8000"
+                    st.session_state.suggested_category = "Electronics"
+                if st.button("🚗 Honda Civic", key="suggest_honda"):
+                    st.session_state.suggested_product = "Honda Civic"
+                    st.session_state.suggested_model = "2020"
+                    st.session_state.suggested_category = "Car"
+            
+            with col3:
+                if st.button("🍳 KitchenAid Mixer", key="suggest_kitchenaid"):
+                    st.session_state.suggested_product = "KitchenAid Stand Mixer"
+                    st.session_state.suggested_model = "KSM150PSER"
+                    st.session_state.suggested_category = "Kitchen"
+                if st.button("💻 MacBook Pro", key="suggest_macbook"):
+                    st.session_state.suggested_product = "MacBook Pro"
+                    st.session_state.suggested_model = "M1 13-inch"
+                    st.session_state.suggested_category = "Tech"
+                    
+            if any(key in st.session_state for key in ['suggested_product', 'suggested_model', 'suggested_category']):
+                st.info("💡 Suggestion selected! Scroll up to see the filled form.")
+                if st.button("🔍 Search Now", use_container_width=True):
+                    with st.spinner("Searching for suggested manual..."):
+                        result = auto_find_and_add_manual(
+                            st.session_state.suggested_product,
+                            st.session_state.suggested_model,
+                            st.session_state.suggested_category
+                        )
+                        if result['success']:
+                            st.success(f"✅ {result['message']}")
+                            st.balloons()
+                        else:
+                            st.error(f"❌ {result['message']}")
         
         # Tips for better results
         with st.expander("💡 Advanced Search Tips & Link Validation"):

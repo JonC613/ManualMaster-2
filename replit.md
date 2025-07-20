@@ -102,11 +102,18 @@ Preferred communication style: Simple, everyday language.
 - Enhanced data integrity with proper database schema
 - **Enhanced Manual Search Functionality:**
   - Added URL validation to ensure all found links are accessible
-  - Implemented multiple search sources (ManualsLib, Google Search)
+  - Implemented multiple search sources (ManualsLib, Manualzilla, ManualsOnline)
   - Added real-time link validation during manual preview
   - Enhanced content quality assessment and user feedback
   - Improved error handling with specific troubleshooting tips
   - Added suggested alternative search terms for failed searches
+  - **New Smart Search Features:**
+    - Enhanced query variations with better search patterns
+    - Multiple search strategies (Quick, Smart, Preview-only)
+    - Instant manual suggestions with popular products
+    - Preview-before-save functionality for better user control
+    - Improved BeautifulSoup parsing for better manual link detection
+    - Support for direct PDF links and manual page links
 
 ### Potential Future Improvements
 - Implement user authentication for multi-user support
