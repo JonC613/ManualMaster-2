@@ -114,6 +114,12 @@ Preferred communication style: Simple, everyday language.
     - Preview-before-save functionality for better user control
     - Improved BeautifulSoup parsing for better manual link detection
     - Support for direct PDF links and manual page links
+  - **QR Code Integration:**
+    - Added QR code scanning capability for product identification
+    - Automatic manual search from scanned QR codes
+    - QR code generation for existing manuals
+    - Support for product codes, URLs, and custom text in QR codes
+    - Smart product information extraction from QR data
 
 ### Potential Future Improvements
 - Implement user authentication for multi-user support

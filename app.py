@@ -10,6 +10,8 @@ import trafilatura
 from urllib.parse import quote
 import os
 import psycopg2
+# QR Code functionality (will be checked on demand)
+QR_AVAILABLE = None
 from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, LargeBinary
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
@@ -141,6 +143,124 @@ def validate_url(url):
         return response.status_code == 200
     except:
         return False
+
+def check_qr_availability():
+    """Check if QR functionality is available"""
+    global QR_AVAILABLE
+    if QR_AVAILABLE is None:
+        try:
+            import qrcode
+            import cv2
+            import numpy as np
+            from PIL import Image
+            from pyzbar import pyzbar
+            QR_AVAILABLE = True
+        except ImportError:
+            QR_AVAILABLE = False
+    return QR_AVAILABLE
+
+def generate_qr_code(data, size=200):
+    """Generate QR code for given data"""
+    if not check_qr_availability():
+        st.error("QR code generation not available. Missing required libraries.")
+        return None
+    
+    import qrcode
+    from PIL import Image
+    
+    qr = qrcode.QRCode(
+        version=1,
+        error_correction=qrcode.constants.ERROR_CORRECT_L,
+        box_size=10,
+        border=4,
+    )
+    qr.add_data(data)
+    qr.make(fit=True)
+    
+    img = qr.make_image(fill_color="black", back_color="white")
+    
+    # Resize to specified size
+    img = img.resize((size, size))
+    return img
+
+def decode_qr_from_image(image):
+    """Decode QR codes from an uploaded image"""
+    if not check_qr_availability():
+        st.error("QR code scanning not available. Missing required libraries.")
+        return []
+    
+    try:
+        import cv2
+        import numpy as np
+        from pyzbar import pyzbar
+        
+        # Convert PIL image to OpenCV format
+        img_array = np.array(image)
+        
+        # Convert RGB to BGR for OpenCV
+        if len(img_array.shape) == 3:
+            img_array = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
+        
+        # Decode QR codes
+        decoded_objects = pyzbar.decode(img_array)
+        
+        results = []
+        for obj in decoded_objects:
+            data = obj.data.decode('utf-8')
+            results.append(data)
+        
+        return results
+    except Exception as e:
+        st.error(f"Error decoding QR code: {str(e)}")
+        return []
+
+def process_qr_data(qr_data):
+    """Process QR code data to extract product information"""
+    # Check if it's a URL
+    if qr_data.startswith(('http://', 'https://')):
+        return {
+            'type': 'url',
+            'data': qr_data,
+            'suggested_search': extract_product_from_url(qr_data)
+        }
+    
+    # Check if it's a product code or model number
+    elif re.match(r'^[A-Z0-9\-_]+$', qr_data.upper()):
+        return {
+            'type': 'product_code',
+            'data': qr_data,
+            'suggested_search': qr_data
+        }
+    
+    # Check if it contains product information
+    else:
+        return {
+            'type': 'text',
+            'data': qr_data,
+            'suggested_search': qr_data
+        }
+
+def extract_product_from_url(url):
+    """Extract potential product information from a URL"""
+    try:
+        # Simple extraction of product names from common URL patterns
+        if 'amazon.com' in url:
+            # Extract product name from Amazon URL
+            match = re.search(r'/([^/]+)/dp/', url)
+            if match:
+                return match.group(1).replace('-', ' ')
+        
+        elif 'support' in url.lower() or 'manual' in url.lower():
+            # Extract from support/manual URLs
+            parts = url.split('/')
+            for part in parts:
+                if len(part) > 3 and not part.startswith('www'):
+                    return part.replace('-', ' ').replace('_', ' ')
+        
+        return url.split('/')[-1] if url.split('/')[-1] else 'Product from QR'
+    
+    except:
+        return 'Product from QR'
 
 def search_manual_online(product_name, model=None):
     """Enhanced search for manuals with multiple sources and strategies"""
@@ -538,7 +658,7 @@ def main():
     st.caption("Upload, organize, and quickly access your instruction manuals")
     
     # Mobile-friendly tabs
-    tab1, tab2, tab3 = st.tabs(["📱 Browse Manuals", "➕ Add Manual", "🔍 Auto-Find Manual"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📱 Browse Manuals", "➕ Add Manual", "🔍 Auto-Find Manual", "📱 QR Scanner"])
     
     with tab2:
         st.header("Upload New Manual")
@@ -916,6 +1036,179 @@ def main():
                             st.error(f"Error clearing manuals: {str(e)}")
                             if db_session:
                                 db_session.rollback()
+    
+    with tab4:
+        st.header("📱 QR Code Scanner")
+        st.caption("Scan QR codes to automatically find product manuals")
+        
+        # Check QR availability first
+        if not check_qr_availability():
+            st.error("🚫 QR Code functionality is not available")
+            st.info("💡 QR functionality requires additional system libraries that aren't currently installed.")
+            st.markdown("""
+            **Available alternatives:**
+            - Use the **Auto-Find Manual** tab to search by product name
+            - Upload manual files directly in the **Add Manual** tab
+            - Try scanning QR codes with your phone and typing the result into Auto-Find
+            """)
+        else:
+            qr_method = st.radio(
+                "Choose scanning method:",
+                ["📷 Upload QR Image", "🔗 Generate QR for Manual"],
+                horizontal=True
+            )
+            
+            if qr_method == "📷 Upload QR Image":
+                st.subheader("📷 Upload QR Code Image")
+                
+                uploaded_qr = st.file_uploader(
+                    "Choose QR code image",
+                    type=['png', 'jpg', 'jpeg'],
+                    help="Upload an image containing a QR code"
+                )
+            
+                if uploaded_qr:
+                    # Display the uploaded image
+                    from PIL import Image
+                    image = Image.open(uploaded_qr)
+                
+                    col1, col2 = st.columns([1, 2])
+                    with col1:
+                        st.image(image, caption="Uploaded QR Code", width=200)
+                    
+                    with col2:
+                        # Decode QR code
+                        with st.spinner("Scanning QR code..."):
+                            qr_results = decode_qr_from_image(image)
+                        
+                        if qr_results:
+                            st.success(f"✅ Found {len(qr_results)} QR code(s)")
+                            
+                            for i, qr_data in enumerate(qr_results):
+                                st.write(f"**QR Code {i+1}:**")
+                                
+                                # Process QR data
+                                processed = process_qr_data(qr_data)
+                                
+                                if processed['type'] == 'url':
+                                    st.write(f"🔗 **Link:** {qr_data}")
+                                    if st.button(f"🌐 Open Link", key=f"open_{i}"):
+                                        st.markdown(f"[Click here to open]({qr_data})")
+                                
+                                elif processed['type'] == 'product_code':
+                                    st.write(f"🏷️ **Product Code:** {qr_data}")
+                                
+                                else:
+                                    st.write(f"📝 **Text:** {qr_data}")
+                                
+                                # Auto-search option
+                                st.write(f"**Suggested Search:** {processed['suggested_search']}")
+                                
+                                if st.button(f"🔍 Search for Manual", key=f"search_{i}"):
+                                    with st.spinner(f"Searching for manual using: {processed['suggested_search']}"):
+                                        result = auto_find_and_add_manual(
+                                            processed['suggested_search'],
+                                            None,
+                                            "Other"  # Default category
+                                        )
+                                        
+                                        if result['success']:
+                                            st.success(f"✅ {result['message']}")
+                                            st.balloons()
+                                        else:
+                                            st.error(f"❌ {result['message']}")
+                                            st.info("💡 Try editing the product name and using the Auto-Find Manual tab")
+                                
+                                st.divider()
+                        
+                        else:
+                            st.error("❌ No QR code found in the image")
+                            st.info("💡 Make sure the QR code is clear and well-lit in the image")
+            
+            else:  # Generate QR for Manual
+                st.subheader("🔗 Generate QR Code for Manual")
+            
+                # Get list of manuals for QR generation
+                manuals = get_all_manuals()
+                
+                if manuals:
+                    manual_options = {f"{manual['title']} ({manual['category']})": manual for manual in manuals}
+                
+                    selected_manual_name = st.selectbox(
+                        "Select manual to generate QR code:",
+                        list(manual_options.keys())
+                    )
+                    
+                    if selected_manual_name:
+                        selected_manual = manual_options[selected_manual_name]
+                        
+                        # QR content options
+                        qr_content_type = st.radio(
+                            "QR Code content:",
+                            ["📖 Manual Title", "🏷️ Manual ID", "📝 Custom Text"],
+                            horizontal=True
+                        )
+                        
+                        if qr_content_type == "📖 Manual Title":
+                            qr_content = selected_manual['title']
+                        elif qr_content_type == "🏷️ Manual ID":
+                            qr_content = f"MANUAL_ID:{selected_manual['id']}"
+                        else:
+                            qr_content = st.text_input(
+                                "Custom QR content:",
+                                value=selected_manual['title'],
+                                help="Enter any text to encode in the QR code"
+                            )
+                        
+                        if qr_content:
+                            col1, col2 = st.columns([1, 1])
+                            
+                            with col1:
+                                st.write("**QR Code Preview:**")
+                                qr_img = generate_qr_code(qr_content, size=250)
+                                st.image(qr_img, width=250)
+                            
+                            with col2:
+                                st.write("**QR Code Info:**")
+                                st.write(f"**Content:** {qr_content}")
+                                st.write(f"**Manual:** {selected_manual['title']}")
+                                st.write(f"**Category:** {selected_manual['category']}")
+                                
+                                # Download QR code
+                                import io
+                                buffer = io.BytesIO()
+                                qr_img.save(buffer, format='PNG')
+                                qr_data = buffer.getvalue()
+                                
+                                st.download_button(
+                                    label="📥 Download QR Code",
+                                    data=qr_data,
+                                    file_name=f"qr_{selected_manual['title'].replace(' ', '_')}.png",
+                                    mime="image/png",
+                                    use_container_width=True
+                                )
+                else:
+                    st.info("📚 No manuals available. Add some manuals first to generate QR codes.")
+        
+        # QR Tips
+        with st.expander("💡 QR Code Tips & Usage"):
+            st.markdown("""
+            **Scanning QR Codes:**
+            - Take clear, well-lit photos of QR codes
+            - Ensure the entire QR code is visible in the image
+            - Works with product QR codes, support links, and manual references
+            
+            **Generating QR Codes:**
+            - Share manual information easily with QR codes
+            - Print QR codes and attach to physical products
+            - Use custom text for special manual references
+            
+            **Common QR Sources:**
+            - Product packaging and labels
+            - User manual covers
+            - Manufacturer support websites
+            - Warranty cards and documentation
+            """)
 
 if __name__ == "__main__":
     main()

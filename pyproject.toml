@@ -11,6 +11,11 @@ dependencies = [
     "pypdf2>=3.0.1",
     "requests>=2.32.4",
     "sqlalchemy>=2.0.41",
+    "streamlit-webrtc>=0.63.3",
     "streamlit>=1.47.0",
     "trafilatura>=2.0.0",
+    "qrcode>=8.2",
+    "pillow>=11.3.0",
+    "opencv-python>=4.12.0.88",
+    "pyzbar>=0.1.9",
 ]
