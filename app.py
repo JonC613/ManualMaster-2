@@ -174,27 +174,30 @@ def check_qr_generation_only():
 
 def generate_qr_code(data, size=200):
     """Generate QR code for given data"""
-    if not check_qr_availability():
+    try:
+        import qrcode
+        from PIL import Image
+        
+        qr = qrcode.QRCode(
+            version=1,
+            error_correction=qrcode.constants.ERROR_CORRECT_L,
+            box_size=10,
+            border=4,
+        )
+        qr.add_data(data)
+        qr.make(fit=True)
+        
+        img = qr.make_image(fill_color="black", back_color="white")
+        
+        # Resize to specified size
+        img = img.resize((size, size))
+        return img
+    except ImportError:
         st.error("QR code generation not available. Missing required libraries.")
         return None
-    
-    import qrcode
-    from PIL import Image
-    
-    qr = qrcode.QRCode(
-        version=1,
-        error_correction=qrcode.constants.ERROR_CORRECT_L,
-        box_size=10,
-        border=4,
-    )
-    qr.add_data(data)
-    qr.make(fit=True)
-    
-    img = qr.make_image(fill_color="black", back_color="white")
-    
-    # Resize to specified size
-    img = img.resize((size, size))
-    return img
+    except Exception as e:
+        st.error(f"Error generating QR code: {str(e)}")
+        return None
 
 def decode_qr_from_image(image):
     """Decode QR codes from an uploaded image"""
@@ -590,6 +593,38 @@ def search_manuals(query, category="All"):
         return manual_dicts
     except Exception as e:
         st.error(f"Error searching manuals: {str(e)}")
+        return []
+
+def get_all_manuals():
+    """Get all manuals from the database"""
+    if not db_session:
+        return []
+    
+    try:
+        # Get all manuals
+        manuals = db_session.query(Manual).all()
+        manual_dicts = []
+        
+        for manual in manuals:
+            manual_dict = {
+                'id': manual.id,
+                'title': manual.title,
+                'category': manual.category,
+                'tags': json.loads(manual.tags or '[]'),
+                'content': manual.content,
+                'file_data': manual.file_data,
+                'file_type': manual.file_type,
+                'filename': manual.filename,
+                'upload_date': manual.upload_date.strftime("%Y-%m-%d %H:%M"),
+                'size': manual.size,
+                'source_url': manual.source_url,
+                'search_query': manual.search_query
+            }
+            manual_dicts.append(manual_dict)
+        
+        return manual_dicts
+    except Exception as e:
+        st.error(f"Error retrieving manuals: {str(e)}")
         return []
 
 def display_manual_card(manual):
@@ -1187,30 +1222,34 @@ def main():
                         if qr_content:
                             col1, col2 = st.columns([1, 1])
                             
-                            with col1:
-                                st.write("**QR Code Preview:**")
-                                qr_img = generate_qr_code(qr_content, size=250)
-                                st.image(qr_img, width=250)
+                            qr_img = generate_qr_code(qr_content, size=250)
                             
-                            with col2:
-                                st.write("**QR Code Info:**")
-                                st.write(f"**Content:** {qr_content}")
-                                st.write(f"**Manual:** {selected_manual['title']}")
-                                st.write(f"**Category:** {selected_manual['category']}")
+                            if qr_img:
+                                with col1:
+                                    st.write("**QR Code Preview:**")
+                                    st.image(qr_img, width=250)
                                 
-                                # Download QR code
-                                import io
-                                buffer = io.BytesIO()
-                                qr_img.save(buffer, format='PNG')
-                                qr_data = buffer.getvalue()
-                                
-                                st.download_button(
-                                    label="📥 Download QR Code",
-                                    data=qr_data,
-                                    file_name=f"qr_{selected_manual['title'].replace(' ', '_')}.png",
-                                    mime="image/png",
-                                    use_container_width=True
-                                )
+                                with col2:
+                                    st.write("**QR Code Info:**")
+                                    st.write(f"**Content:** {qr_content}")
+                                    st.write(f"**Manual:** {selected_manual['title']}")
+                                    st.write(f"**Category:** {selected_manual['category']}")
+                                    
+                                    # Download QR code
+                                    import io
+                                    buffer = io.BytesIO()
+                                    qr_img.save(buffer, format='PNG')
+                                    qr_data = buffer.getvalue()
+                                    
+                                    st.download_button(
+                                        label="📥 Download QR Code",
+                                        data=qr_data,
+                                        file_name=f"qr_{selected_manual['title'].replace(' ', '_')}.png",
+                                        mime="image/png",
+                                        use_container_width=True
+                                    )
+                            else:
+                                st.error("Failed to generate QR code")
                 else:
                     st.info("📚 No manuals available. Add some manuals first to generate QR codes.")
         
