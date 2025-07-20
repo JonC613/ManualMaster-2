@@ -5,6 +5,9 @@ import json
 from datetime import datetime
 import io
 import re
+import requests
+import trafilatura
+from urllib.parse import quote
 
 # Try to import PDF libraries
 try:
@@ -88,6 +91,85 @@ def decode_base64_to_file(encoded_data, filename):
     decoded_data = base64.b64decode(encoded_data)
     return io.BytesIO(decoded_data)
 
+def search_manual_online(product_name, model=None):
+    """Search for manuals online using web scraping"""
+    try:
+        # Construct search query
+        query = f"{product_name} manual"
+        if model:
+            query += f" {model}"
+        
+        # Search on ManualsOnline - a reliable source for manuals
+        search_url = f"https://www.manualslib.com/search/{quote(query)}"
+        
+        # Attempt to get manual content
+        downloaded = trafilatura.fetch_url(search_url)
+        if downloaded:
+            text = trafilatura.extract(downloaded)
+            return {
+                'success': True,
+                'content': text[:3000] if text else "No content found",
+                'source_url': search_url,
+                'search_query': query
+            }
+        else:
+            return {
+                'success': False,
+                'error': 'Could not fetch search results',
+                'search_query': query
+            }
+    except Exception as e:
+        return {
+            'success': False,
+            'error': str(e),
+            'search_query': query if 'query' in locals() else product_name
+        }
+
+def auto_find_and_add_manual(product_name, model=None, category="Other"):
+    """Automatically find and add a manual from web search"""
+    try:
+        # Search for the manual online
+        search_result = search_manual_online(product_name, model)
+        
+        if search_result['success']:
+            # Create a manual entry from web search
+            title = f"{product_name}"
+            if model:
+                title += f" {model}"
+            title += " (Auto-found)"
+            
+            manual = {
+                'id': len(st.session_state.manuals),
+                'title': title,
+                'category': category,
+                'tags': ['auto-found', 'web-search'],
+                'content': search_result['content'],
+                'file_data': None,  # No file data for web-found manuals
+                'file_type': 'web',
+                'filename': f"{title.replace(' ', '_')}.txt",
+                'upload_date': datetime.now().strftime("%Y-%m-%d %H:%M"),
+                'size': len(search_result['content']),
+                'source_url': search_result.get('source_url', ''),
+                'search_query': search_result.get('search_query', '')
+            }
+            
+            st.session_state.manuals.append(manual)
+            return {
+                'success': True,
+                'message': f"Successfully found and added manual for {title}",
+                'manual': manual
+            }
+        else:
+            return {
+                'success': False,
+                'message': f"Could not find manual for {product_name}: {search_result.get('error', 'Unknown error')}"
+            }
+    except Exception as e:
+        return {
+            'success': False,
+            'message': f"Error searching for manual: {str(e)}"
+        }
+
 def add_manual(title, category, tags, file, file_type):
     """Add a new manual to the collection"""
     # Extract text content
@@ -155,6 +237,10 @@ def display_manual_card(manual):
             if manual['tags']:
                 tag_str = " ".join([f"#{tag}" for tag in manual['tags']])
                 st.text(f"🏷️ {tag_str}")
+            
+            # Show source URL for web-found manuals
+            if manual.get('file_type') == 'web' and manual.get('source_url'):
+                st.caption(f"🌐 Source: {manual['source_url']}")
         
         with col2:
             # View button
@@ -163,15 +249,25 @@ def display_manual_card(manual):
                 st.rerun()
         
         with col3:
-            # Download button
-            file_data = decode_base64_to_file(manual['file_data'], manual['filename'])
-            st.download_button(
-                label="📥 Download",
-                data=file_data.getvalue(),
-                file_name=manual['filename'],
-                mime="application/pdf" if manual['file_type'] == "pdf" else "text/plain",
-                key=f"download_{manual['id']}"
-            )
+            # Download button (only for uploaded files)
+            if manual.get('file_data'):
+                file_data = decode_base64_to_file(manual['file_data'], manual['filename'])
+                st.download_button(
+                    label="📥 Download",
+                    data=file_data.getvalue(),
+                    file_name=manual['filename'],
+                    mime="application/pdf" if manual['file_type'] == "pdf" else "text/plain",
+                    key=f"download_{manual['id']}"
+                )
+            else:
+                # For web-found manuals, offer to download as text
+                st.download_button(
+                    label="📥 Download",
+                    data=manual['content'],
+                    file_name=manual['filename'],
+                    mime="text/plain",
+                    key=f"download_{manual['id']}"
+                )
         
         # Show content if viewing
         if st.session_state.get(f"viewing_{manual['id']}", False):
@@ -207,7 +303,7 @@ def main():
     st.caption("Upload, organize, and quickly access your instruction manuals")
     
     # Mobile-friendly tabs
-    tab1, tab2 = st.tabs(["📱 Browse Manuals", "➕ Add Manual"])
+    tab1, tab2, tab3 = st.tabs(["📱 Browse Manuals", "➕ Add Manual", "🔍 Auto-Find Manual"])
     
     with tab2:
         st.header("Upload New Manual")
@@ -258,6 +354,83 @@ def main():
                             st.error(f"❌ Error saving manual: {str(e)}")
                     else:
                         st.error("❌ Please enter a title for your manual.")
+    
+    with tab3:
+        st.header("🔍 Auto-Find Manual")
+        st.caption("Let the app search the web for manuals automatically")
+        
+        with st.form("auto_find_form"):
+            col1, col2 = st.columns([2, 1])
+            
+            with col1:
+                product_name = st.text_input(
+                    "Product Name *",
+                    placeholder="e.g., Samsung TV, Toyota Camry, iPhone",
+                    help="Enter the product name you need a manual for"
+                )
+            
+            with col2:
+                model_number = st.text_input(
+                    "Model Number",
+                    placeholder="e.g., UN55TU8000",
+                    help="Optional: Enter model number for better results"
+                )
+            
+            category = st.selectbox(
+                "Category",
+                options=[cat for cat in CATEGORIES if cat != "All"],
+                index=9,  # Default to "Other" (index 9 in filtered list)
+                help="Select the category for this product"
+            )
+            
+            find_button = st.form_submit_button("🔍 Search for Manual", use_container_width=True)
+            
+            if find_button:
+                if product_name.strip():
+                    with st.spinner(f"Searching the web for {product_name} manual..."):
+                        result = auto_find_and_add_manual(
+                            product_name.strip(), 
+                            model_number.strip() if model_number.strip() else None,
+                            category
+                        )
+                        
+                        if result['success']:
+                            st.success(f"✅ {result['message']}")
+                            st.balloons()
+                            # Show preview of found manual
+                            with st.expander("📖 Preview of Found Manual", expanded=True):
+                                manual = result['manual']
+                                st.write(f"**Title:** {manual['title']}")
+                                st.write(f"**Category:** {manual['category']}")
+                                st.write(f"**Source:** {manual.get('source_url', 'N/A')}")
+                                st.text_area(
+                                    "Content Preview:",
+                                    manual['content'][:500] + "..." if len(manual['content']) > 500 else manual['content'],
+                                    height=200,
+                                    disabled=True
+                                )
+                        else:
+                            st.error(f"❌ {result['message']}")
+                            st.info("💡 Try different keywords or check the product name spelling.")
+                else:
+                    st.error("❌ Please enter a product name to search for.")
+        
+        st.divider()
+        
+        # Tips for better results
+        with st.expander("💡 Tips for Better Search Results"):
+            st.markdown("""
+            **To get the best results:**
+            - Use the exact product name and brand (e.g., "Samsung Galaxy S21" not just "phone")
+            - Include model numbers when available
+            - Try variations if first search doesn't work
+            - Some products may not have manuals available online
+            
+            **Examples of good searches:**
+            - LG 55NANO90UNA TV
+            - KitchenAid Stand Mixer KSM150
+            - Honda Civic 2020
+            """)
     
     with tab1:
         st.header("Your Manuals")

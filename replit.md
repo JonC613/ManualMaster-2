@@ -28,6 +28,12 @@ Preferred communication style: Simple, everyday language.
 - Error handling for missing PDF libraries
 - Document parsing and text extraction
 
+### Auto-Find Manual Feature (NEW)
+- Web scraping functionality using Trafilatura library
+- Automatic manual search from online sources
+- Support for product name and model number searches
+- Integration with ManualsLib.com for manual content
+
 ### Categorization System
 - Predefined categories including: Appliance, Car, Tech, Home & Garden, Tools, Electronics, Kitchen, HVAC
 - Category-based filtering system
@@ -41,14 +47,16 @@ Preferred communication style: Simple, everyday language.
 - Manual storage in session state
 - JSON serialization support for data export/import
 - Base64 encoding for file handling
+- Support for web-sourced manuals (no file data storage)
 
 ## Data Flow
 
 1. **Upload**: User uploads PDF files through Streamlit file uploader
-2. **Processing**: PDF content is extracted using available PDF libraries
-3. **Storage**: Manual data is stored in session state with metadata (title, category, upload date)
-4. **Search/Filter**: Users can search and filter manuals by category or text content
-5. **Display**: Manuals are presented in a user-friendly interface
+2. **Auto-Find**: User searches for manuals automatically via web scraping
+3. **Processing**: PDF content is extracted using available PDF libraries OR web content is extracted using Trafilatura
+4. **Storage**: Manual data is stored in session state with metadata (title, category, upload date, source URL)
+5. **Search/Filter**: Users can search and filter manuals by category or text content
+6. **Display**: Manuals are presented in a user-friendly interface with source attribution
 
 ## External Dependencies
 
@@ -56,6 +64,9 @@ Preferred communication style: Simple, everyday language.
 - `streamlit` - Web application framework
 - `pandas` - Data manipulation and analysis
 - `base64` - File encoding/decoding
+- `requests` - HTTP requests for web scraping
+- `trafilatura` - Web content extraction and text processing
+- `beautifulsoup4` - HTML parsing support
 
 ### Optional Libraries (with fallback handling)
 - `PyPDF2` - Primary PDF processing library
@@ -66,6 +77,7 @@ Preferred communication style: Simple, everyday language.
 - `datetime` - Timestamp management
 - `io` - Input/output operations
 - `re` - Regular expressions for text processing
+- `urllib.parse` - URL encoding for search queries
 
 ## Deployment Strategy
 
