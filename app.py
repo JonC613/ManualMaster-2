@@ -1158,7 +1158,8 @@ def main():
             if camera_qr_available:
                 qr_options.append("📹 Live Camera Scan")
             if qr_scanning_available:
-                qr_options.append("📷 Upload QR Image") 
+                qr_options.append("📷 Upload QR Image")
+            qr_options.append("⌨️ Enter QR Text")  # Always available
             if qr_generation_available:
                 qr_options.append("🔗 Generate QR for Manual")
             
@@ -1181,47 +1182,66 @@ def main():
                     st.session_state.detected_qr_codes = []
                 
                 st.info("💡 Allow camera access when prompted. Point your camera at a QR code to scan it.")
+                st.warning("⚠️ Live camera scanning may have limitations due to system libraries. For best results, use your phone's camera app and enter the QR content in the Auto-Find Manual tab.")
                 
                 try:
-                    from streamlit_webrtc import webrtc_streamer, VideoTransformerBase, RTCConfiguration
+                    from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfiguration
                     import av
+                    import cv2
+                    import numpy as np
                     
-                    class QRVideoTransformer(VideoTransformerBase):
+                    class QRVideoProcessor(VideoProcessorBase):
                         def __init__(self):
                             self.detected_codes = []
                             
-                        def transform(self, frame):
+                        def recv(self, frame):
                             try:
-                                import cv2
-                                import numpy as np
-                                from pyzbar import pyzbar
-                                
+                                # Check if pyzbar is available, if not use OpenCV QR detector
                                 img = frame.to_ndarray(format="bgr24")
                                 
-                                # Decode QR codes
-                                decoded_objects = pyzbar.decode(img)
-                                
-                                # Draw rectangles around detected QR codes
-                                for obj in decoded_objects:
-                                    qr_data = obj.data.decode('utf-8')
+                                # Try pyzbar first
+                                try:
+                                    from pyzbar import pyzbar
+                                    decoded_objects = pyzbar.decode(img)
                                     
-                                    # Add to detected codes if not already present
-                                    if qr_data not in self.detected_codes:
-                                        self.detected_codes.append(qr_data)
-                                        if qr_data not in st.session_state.detected_qr_codes:
-                                            st.session_state.detected_qr_codes.append(qr_data)
-                                    
-                                    # Draw rectangle around QR code
-                                    points = obj.polygon
-                                    if len(points) == 4:
-                                        pts = np.array(points, np.int32)
-                                        pts = pts.reshape((-1, 1, 2))
-                                        cv2.polylines(img, [pts], True, (0, 255, 0), 3)
+                                    for obj in decoded_objects:
+                                        qr_data = obj.data.decode('utf-8')
                                         
-                                        # Add text
-                                        x, y = points[0]
-                                        cv2.putText(img, "QR Detected!", (x, y-10), 
-                                                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                                        # Add to detected codes if not already present
+                                        if qr_data not in self.detected_codes:
+                                            self.detected_codes.append(qr_data)
+                                            if qr_data not in st.session_state.detected_qr_codes:
+                                                st.session_state.detected_qr_codes.append(qr_data)
+                                        
+                                        # Draw rectangle around QR code
+                                        points = obj.polygon
+                                        if len(points) == 4:
+                                            pts = np.array(points, np.int32)
+                                            pts = pts.reshape((-1, 1, 2))
+                                            cv2.polylines(img, [pts], True, (0, 255, 0), 3)
+                                            
+                                            # Add text
+                                            x, y = points[0]
+                                            cv2.putText(img, "QR Detected!", (x, y-10), 
+                                                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                                
+                                except Exception:
+                                    # Fallback to OpenCV QR detector
+                                    detector = cv2.QRCodeDetector()
+                                    data, vertices, _ = detector.detectAndDecode(img)
+                                    
+                                    if data:
+                                        if data not in self.detected_codes:
+                                            self.detected_codes.append(data)
+                                            if data not in st.session_state.detected_qr_codes:
+                                                st.session_state.detected_qr_codes.append(data)
+                                        
+                                        # Draw rectangle around QR code
+                                        if vertices is not None:
+                                            vertices = vertices.astype(int)
+                                            cv2.polylines(img, [vertices], True, (0, 255, 0), 3)
+                                            cv2.putText(img, "QR Detected!", (vertices[0][0][0], vertices[0][0][1]-10), 
+                                                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
                                 
                                 return av.VideoFrame.from_ndarray(img, format="bgr24")
                             except Exception as e:
@@ -1234,7 +1254,7 @@ def main():
                     
                     webrtc_ctx = webrtc_streamer(
                         key="qr-scanner",
-                        video_transformer_factory=QRVideoTransformer,
+                        video_processor_factory=QRVideoProcessor,
                         rtc_configuration=RTC_CONFIGURATION,
                         media_stream_constraints={"video": True, "audio": False},
                         async_processing=True,
@@ -1272,7 +1292,41 @@ def main():
                     
                 except ImportError:
                     st.error("Camera QR scanning requires additional libraries that aren't available.")
-                    st.info("Try the 'Upload QR Image' option instead.")
+                    st.info("Try the 'Enter QR Text' option instead.")
+            
+            elif qr_method == "⌨️ Enter QR Text":
+                st.subheader("⌨️ Enter QR Code Content")
+                st.info("💡 Scan QR codes with your phone's camera app and paste the content here.")
+                
+                qr_text_input = st.text_area(
+                    "QR Code Content:",
+                    placeholder="Paste the text from your QR code here...",
+                    height=100,
+                    help="Use your phone's camera app to scan QR codes, then copy and paste the result here"
+                )
+                
+                if qr_text_input.strip():
+                    st.write("**QR Content Preview:**")
+                    st.code(qr_text_input.strip())
+                    
+                    # Process QR data
+                    processed = process_qr_data(qr_text_input.strip())
+                    st.write(f"**Suggested Search:** {processed['suggested_search']}")
+                    
+                    if st.button("🔍 Search for Manual", key="manual_qr_search"):
+                        with st.spinner(f"Searching for manual using: {processed['suggested_search']}"):
+                            result = auto_find_and_add_manual(
+                                processed['suggested_search'],
+                                None,
+                                "Other"
+                            )
+                            
+                            if result['success']:
+                                st.success(f"✅ {result['message']}")
+                                st.balloons()
+                            else:
+                                st.error(f"❌ {result['message']}")
+                                st.info("💡 Try editing the search terms and using the Auto-Find Manual tab")
             
             elif qr_method == "📷 Upload QR Image" and qr_scanning_available:
                 st.subheader("📷 Upload QR Code Image")
