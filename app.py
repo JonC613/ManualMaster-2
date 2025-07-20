@@ -1,0 +1,329 @@
+import streamlit as st
+import pandas as pd
+import base64
+import json
+from datetime import datetime
+import io
+import re
+
+# Try to import PDF libraries
+try:
+    import PyPDF2
+    PDF_AVAILABLE = True
+except ImportError:
+    try:
+        import pdfplumber
+        PDF_AVAILABLE = True
+        USE_PDFPLUMBER = True
+    except ImportError:
+        PDF_AVAILABLE = False
+        USE_PDFPLUMBER = False
+
+# Configure page
+st.set_page_config(
+    page_title="Nate's Manual App",
+    page_icon="📖",
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
+
+# Initialize session state
+if 'manuals' not in st.session_state:
+    st.session_state.manuals = []
+
+if 'search_query' not in st.session_state:
+    st.session_state.search_query = ""
+
+if 'selected_category' not in st.session_state:
+    st.session_state.selected_category = "All"
+
+# Predefined categories
+CATEGORIES = [
+    "All",
+    "Appliance", 
+    "Car", 
+    "Tech", 
+    "Home & Garden",
+    "Tools",
+    "Electronics",
+    "Kitchen",
+    "HVAC",
+    "Plumbing",
+    "Other"
+]
+
+def extract_text_from_pdf(pdf_file):
+    """Extract text from PDF file"""
+    if not PDF_AVAILABLE:
+        return "PDF text extraction not available. Please install PyPDF2 or pdfplumber."
+    
+    try:
+        pdf_file.seek(0)
+        
+        if 'USE_PDFPLUMBER' in globals() and USE_PDFPLUMBER:
+            import pdfplumber
+            text = ""
+            with pdfplumber.open(pdf_file) as pdf:
+                for page in pdf.pages:
+                    page_text = page.extract_text()
+                    if page_text:
+                        text += page_text + "\n"
+            return text
+        else:
+            reader = PyPDF2.PdfReader(pdf_file)
+            text = ""
+            for page in reader.pages:
+                text += page.extract_text() + "\n"
+            return text
+    except Exception as e:
+        return f"Error extracting text from PDF: {str(e)}"
+
+def encode_file_to_base64(file):
+    """Encode file to base64 for storage"""
+    file.seek(0)
+    return base64.b64encode(file.read()).decode()
+
+def decode_base64_to_file(encoded_data, filename):
+    """Decode base64 data back to file"""
+    decoded_data = base64.b64decode(encoded_data)
+    return io.BytesIO(decoded_data)
+
+def add_manual(title, category, tags, file, file_type):
+    """Add a new manual to the collection"""
+    # Extract text content
+    if file_type == "pdf":
+        content = extract_text_from_pdf(file)
+    else:
+        file.seek(0)
+        content = file.read().decode('utf-8', errors='ignore')
+    
+    # Encode file for storage
+    encoded_file = encode_file_to_base64(file)
+    
+    # Create manual entry
+    manual = {
+        'id': len(st.session_state.manuals),
+        'title': title,
+        'category': category,
+        'tags': [tag.strip() for tag in tags.split(',') if tag.strip()],
+        'content': content,
+        'file_data': encoded_file,
+        'file_type': file_type,
+        'filename': file.name,
+        'upload_date': datetime.now().strftime("%Y-%m-%d %H:%M"),
+        'size': len(encoded_file)
+    }
+    
+    st.session_state.manuals.append(manual)
+    return True
+
+def search_manuals(query, category="All"):
+    """Search manuals based on query and category"""
+    if not st.session_state.manuals:
+        return []
+    
+    filtered_manuals = st.session_state.manuals.copy()
+    
+    # Filter by category
+    if category != "All":
+        filtered_manuals = [m for m in filtered_manuals if m['category'] == category]
+    
+    # Search by query
+    if query:
+        query = query.lower()
+        search_results = []
+        for manual in filtered_manuals:
+            # Search in title, tags, and content
+            if (query in manual['title'].lower() or
+                any(query in tag.lower() for tag in manual['tags']) or
+                query in manual['content'].lower()):
+                search_results.append(manual)
+        filtered_manuals = search_results
+    
+    return filtered_manuals
+
+def display_manual_card(manual):
+    """Display a manual as a card"""
+    with st.container():
+        col1, col2, col3 = st.columns([3, 1, 1])
+        
+        with col1:
+            st.subheader(manual['title'])
+            st.caption(f"📁 {manual['category']} | 📅 {manual['upload_date']}")
+            
+            # Display tags
+            if manual['tags']:
+                tag_str = " ".join([f"#{tag}" for tag in manual['tags']])
+                st.text(f"🏷️ {tag_str}")
+        
+        with col2:
+            # View button
+            if st.button("👁️ View", key=f"view_{manual['id']}"):
+                st.session_state[f"viewing_{manual['id']}"] = True
+                st.rerun()
+        
+        with col3:
+            # Download button
+            file_data = decode_base64_to_file(manual['file_data'], manual['filename'])
+            st.download_button(
+                label="📥 Download",
+                data=file_data.getvalue(),
+                file_name=manual['filename'],
+                mime="application/pdf" if manual['file_type'] == "pdf" else "text/plain",
+                key=f"download_{manual['id']}"
+            )
+        
+        # Show content if viewing
+        if st.session_state.get(f"viewing_{manual['id']}", False):
+            with st.expander("📖 Manual Content", expanded=True):
+                # Show first 2000 characters with option to show more
+                content = manual['content']
+                if len(content) > 2000:
+                    st.text_area(
+                        "Content Preview (first 2000 characters):",
+                        content[:2000] + "...\n\n[Content truncated - download file for full content]",
+                        height=300,
+                        disabled=True,
+                        key=f"content_{manual['id']}"
+                    )
+                else:
+                    st.text_area(
+                        "Full Content:",
+                        content,
+                        height=300,
+                        disabled=True,
+                        key=f"content_{manual['id']}"
+                    )
+                
+                if st.button("✖️ Close", key=f"close_{manual['id']}"):
+                    st.session_state[f"viewing_{manual['id']}"] = False
+                    st.rerun()
+        
+        st.divider()
+
+def main():
+    # App Header
+    st.title("📖 Nate's Manual App")
+    st.caption("Upload, organize, and quickly access your instruction manuals")
+    
+    # Mobile-friendly tabs
+    tab1, tab2 = st.tabs(["📱 Browse Manuals", "➕ Add Manual"])
+    
+    with tab2:
+        st.header("Upload New Manual")
+        
+        # File upload
+        uploaded_file = st.file_uploader(
+            "Choose a file",
+            type=['pdf', 'txt'],
+            help="Upload PDF or text files"
+        )
+        
+        if uploaded_file:
+            # Manual details form
+            with st.form("manual_form"):
+                title = st.text_input(
+                    "Manual Title",
+                    value=uploaded_file.name.rsplit('.', 1)[0],
+                    help="Give your manual a descriptive title"
+                )
+                
+                category = st.selectbox(
+                    "Category",
+                    options=[cat for cat in CATEGORIES if cat != "All"],
+                    help="Select the category that best fits your manual"
+                )
+                
+                tags = st.text_input(
+                    "Tags (comma-separated)",
+                    placeholder="e.g., warranty, troubleshooting, setup",
+                    help="Add tags to make your manual easier to find"
+                )
+                
+                submitted = st.form_submit_button("💾 Save Manual")
+                
+                if submitted:
+                    if title.strip():
+                        file_type = uploaded_file.name.split('.')[-1].lower()
+                        try:
+                            success = add_manual(title.strip(), category, tags, uploaded_file, file_type)
+                            if success:
+                                st.success(f"✅ Manual '{title}' saved successfully!")
+                                st.balloons()
+                                # Clear the form by switching tabs
+                                st.session_state.active_tab = 0
+                            else:
+                                st.error("❌ Failed to save manual. Please try again.")
+                        except Exception as e:
+                            st.error(f"❌ Error saving manual: {str(e)}")
+                    else:
+                        st.error("❌ Please enter a title for your manual.")
+    
+    with tab1:
+        st.header("Your Manuals")
+        
+        # Search and filter section
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            search_query = st.text_input(
+                "🔍 Search manuals",
+                value=st.session_state.search_query,
+                placeholder="Search by title, tags, or content...",
+                key="search_input"
+            )
+            st.session_state.search_query = search_query
+        
+        with col2:
+            selected_category = st.selectbox(
+                "📂 Filter by category",
+                options=CATEGORIES,
+                index=CATEGORIES.index(st.session_state.selected_category),
+                key="category_filter"
+            )
+            st.session_state.selected_category = selected_category
+        
+        # Display manual count
+        total_manuals = len(st.session_state.manuals)
+        filtered_manuals = search_manuals(search_query, selected_category)
+        
+        if total_manuals == 0:
+            st.info("📭 No manuals uploaded yet. Use the 'Add Manual' tab to get started!")
+        else:
+            st.caption(f"Showing {len(filtered_manuals)} of {total_manuals} manuals")
+            
+            if not filtered_manuals:
+                st.warning("🔍 No manuals match your search criteria. Try different keywords or category.")
+            else:
+                # Sort options
+                sort_option = st.radio(
+                    "Sort by:",
+                    ["📅 Upload Date (Newest)", "📅 Upload Date (Oldest)", "🔤 Title (A-Z)", "🔤 Title (Z-A)"],
+                    horizontal=True
+                )
+                
+                # Sort manuals
+                if "Newest" in sort_option:
+                    filtered_manuals.sort(key=lambda x: x['upload_date'], reverse=True)
+                elif "Oldest" in sort_option:
+                    filtered_manuals.sort(key=lambda x: x['upload_date'])
+                elif "A-Z" in sort_option:
+                    filtered_manuals.sort(key=lambda x: x['title'].lower())
+                elif "Z-A" in sort_option:
+                    filtered_manuals.sort(key=lambda x: x['title'].lower(), reverse=True)
+                
+                # Display manuals
+                for manual in filtered_manuals:
+                    display_manual_card(manual)
+        
+        # Clear all data option (for development/testing)
+        if st.session_state.manuals:
+            with st.expander("⚙️ Advanced Options"):
+                if st.button("🗑️ Clear All Manuals", type="secondary"):
+                    if st.checkbox("I confirm I want to delete all manuals"):
+                        st.session_state.manuals = []
+                        st.success("All manuals cleared!")
+                        st.rerun()
+
+if __name__ == "__main__":
+    main()
