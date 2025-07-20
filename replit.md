@@ -18,8 +18,9 @@ Preferred communication style: Simple, everyday language.
 ### Backend Architecture
 - **Language**: Python
 - **Framework**: Streamlit (handles both frontend and backend logic)
+- **Database**: PostgreSQL with SQLAlchemy ORM for persistent data storage
 - **File Processing**: Support for PDF file reading using PyPDF2 or pdfplumber as fallback options
-- **Data Storage**: In-memory storage using Streamlit session state (non-persistent)
+- **Data Storage**: PostgreSQL database for persistent manual storage (replaces session state)
 
 ## Key Components
 
@@ -67,6 +68,8 @@ Preferred communication style: Simple, everyday language.
 - `requests` - HTTP requests for web scraping
 - `trafilatura` - Web content extraction and text processing
 - `beautifulsoup4` - HTML parsing support
+- `psycopg2-binary` - PostgreSQL database adapter
+- `sqlalchemy` - ORM for database operations
 
 ### Optional Libraries (with fallback handling)
 - `PyPDF2` - Primary PDF processing library
@@ -87,15 +90,22 @@ Preferred communication style: Simple, everyday language.
 - No database setup required (uses in-memory storage)
 
 ### Production Considerations
-- **Limitation**: Current implementation uses session state for storage, which means data is not persistent across server restarts
-- **Scalability**: Single-user sessions only; no multi-user support in current architecture
-- **File Storage**: Files are processed but not permanently stored on disk
+- **Data Persistence**: PostgreSQL database ensures data persists across server restarts
+- **Scalability**: Single-user sessions with shared database; no user authentication in current architecture
+- **File Storage**: Binary files stored in database as BLOB data
+- **Database**: Automatic table creation on first run using SQLAlchemy migrations
 
-### Potential Improvements
-- Add persistent database storage (SQLite, PostgreSQL)
+### Recent Improvements (2025-07-20)
+- Implemented PostgreSQL database with SQLAlchemy ORM
+- Added persistent storage for manuals and metadata
+- Replaced session state with database queries for data retrieval
+- Enhanced data integrity with proper database schema
+
+### Potential Future Improvements
 - Implement user authentication for multi-user support
-- Add file system or cloud storage for uploaded documents
+- Add file system or cloud storage for larger files
 - Implement proper error logging and monitoring
+- Add database connection pooling for better performance
 
 ## Notes
 

@@ -8,6 +8,12 @@ import re
 import requests
 import trafilatura
 from urllib.parse import quote
+import os
+import psycopg2
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, LargeBinary
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.exc import SQLAlchemyError
 
 # Try to import PDF libraries
 try:
@@ -22,6 +28,43 @@ except ImportError:
         PDF_AVAILABLE = False
         USE_PDFPLUMBER = False
 
+# Database setup
+Base = declarative_base()
+
+class Manual(Base):
+    __tablename__ = 'manuals'
+    
+    id = Column(Integer, primary_key=True)
+    title = Column(String(255), nullable=False)
+    category = Column(String(100), nullable=False)
+    tags = Column(Text)  # JSON string of tags
+    content = Column(Text, nullable=False)
+    file_data = Column(LargeBinary)  # For uploaded files
+    file_type = Column(String(50), nullable=False)
+    filename = Column(String(255), nullable=False)
+    upload_date = Column(DateTime, default=datetime.utcnow)
+    size = Column(Integer, default=0)
+    source_url = Column(String(500))  # For web-found manuals
+    search_query = Column(String(255))  # Original search query
+
+# Database connection
+@st.cache_resource
+def get_database_connection():
+    """Get database connection and create tables if they don't exist"""
+    try:
+        database_url = os.getenv('DATABASE_URL')
+        if not database_url:
+            st.error("Database URL not found. Please check your environment variables.")
+            return None
+        
+        engine = create_engine(database_url)
+        Base.metadata.create_all(engine)
+        Session = sessionmaker(bind=engine)
+        return Session()
+    except Exception as e:
+        st.error(f"Database connection failed: {str(e)}")
+        return None
+
 # Configure page
 st.set_page_config(
     page_title="Nate's Manual App",
@@ -31,14 +74,14 @@ st.set_page_config(
 )
 
 # Initialize session state
-if 'manuals' not in st.session_state:
-    st.session_state.manuals = []
-
 if 'search_query' not in st.session_state:
     st.session_state.search_query = ""
 
 if 'selected_category' not in st.session_state:
     st.session_state.selected_category = "All"
+
+# Initialize database connection
+db_session = get_database_connection()
 
 # Predefined categories
 CATEGORIES = [
@@ -127,6 +170,12 @@ def search_manual_online(product_name, model=None):
 
 def auto_find_and_add_manual(product_name, model=None, category="Other"):
     """Automatically find and add a manual from web search"""
+    if not db_session:
+        return {
+            'success': False,
+            'message': "Database connection not available"
+        }
+    
     try:
         # Search for the manual online
         search_result = search_manual_online(product_name, model)
@@ -138,26 +187,41 @@ def auto_find_and_add_manual(product_name, model=None, category="Other"):
                 title += f" {model}"
             title += " (Auto-found)"
             
-            manual = {
-                'id': len(st.session_state.manuals),
-                'title': title,
-                'category': category,
-                'tags': ['auto-found', 'web-search'],
-                'content': search_result['content'],
-                'file_data': None,  # No file data for web-found manuals
-                'file_type': 'web',
-                'filename': f"{title.replace(' ', '_')}.txt",
-                'upload_date': datetime.now().strftime("%Y-%m-%d %H:%M"),
-                'size': len(search_result['content']),
-                'source_url': search_result.get('source_url', ''),
-                'search_query': search_result.get('search_query', '')
+            manual = Manual(
+                title=title,
+                category=category,
+                tags=json.dumps(['auto-found', 'web-search']),
+                content=search_result['content'],
+                file_data=None,  # No file data for web-found manuals
+                file_type='web',
+                filename=f"{title.replace(' ', '_')}.txt",
+                size=len(search_result['content']),
+                source_url=search_result.get('source_url', ''),
+                search_query=search_result.get('search_query', '')
+            )
+            
+            db_session.add(manual)
+            db_session.commit()
+            
+            # Convert to dict for return
+            manual_dict = {
+                'id': manual.id,
+                'title': manual.title,
+                'category': manual.category,
+                'tags': json.loads(manual.tags),
+                'content': manual.content,
+                'file_type': manual.file_type,
+                'filename': manual.filename,
+                'upload_date': manual.upload_date.strftime("%Y-%m-%d %H:%M"),
+                'size': manual.size,
+                'source_url': manual.source_url,
+                'search_query': manual.search_query
             }
             
-            st.session_state.manuals.append(manual)
             return {
                 'success': True,
                 'message': f"Successfully found and added manual for {title}",
-                'manual': manual
+                'manual': manual_dict
             }
         else:
             return {
@@ -165,64 +229,97 @@ def auto_find_and_add_manual(product_name, model=None, category="Other"):
                 'message': f"Could not find manual for {product_name}: {search_result.get('error', 'Unknown error')}"
             }
     except Exception as e:
+        db_session.rollback()
         return {
             'success': False,
             'message': f"Error searching for manual: {str(e)}"
         }
 
 def add_manual(title, category, tags, file, file_type):
-    """Add a new manual to the collection"""
-    # Extract text content
-    if file_type == "pdf":
-        content = extract_text_from_pdf(file)
-    else:
+    """Add a new manual to the database"""
+    if not db_session:
+        st.error("Database connection not available")
+        return False
+    
+    try:
+        # Extract text content
+        if file_type == "pdf":
+            content = extract_text_from_pdf(file)
+        else:
+            file.seek(0)
+            content = file.read().decode('utf-8', errors='ignore')
+        
+        # Encode file for storage
         file.seek(0)
-        content = file.read().decode('utf-8', errors='ignore')
-    
-    # Encode file for storage
-    encoded_file = encode_file_to_base64(file)
-    
-    # Create manual entry
-    manual = {
-        'id': len(st.session_state.manuals),
-        'title': title,
-        'category': category,
-        'tags': [tag.strip() for tag in tags.split(',') if tag.strip()],
-        'content': content,
-        'file_data': encoded_file,
-        'file_type': file_type,
-        'filename': file.name,
-        'upload_date': datetime.now().strftime("%Y-%m-%d %H:%M"),
-        'size': len(encoded_file)
-    }
-    
-    st.session_state.manuals.append(manual)
-    return True
+        file_data = file.read()
+        
+        # Create manual entry
+        manual = Manual(
+            title=title,
+            category=category,
+            tags=json.dumps([tag.strip() for tag in tags.split(',') if tag.strip()]),
+            content=content,
+            file_data=file_data,
+            file_type=file_type,
+            filename=file.name,
+            size=len(file_data)
+        )
+        
+        db_session.add(manual)
+        db_session.commit()
+        return True
+    except Exception as e:
+        db_session.rollback()
+        st.error(f"Error saving manual: {str(e)}")
+        return False
 
 def search_manuals(query, category="All"):
     """Search manuals based on query and category"""
-    if not st.session_state.manuals:
+    if not db_session:
         return []
     
-    filtered_manuals = st.session_state.manuals.copy()
-    
-    # Filter by category
-    if category != "All":
-        filtered_manuals = [m for m in filtered_manuals if m['category'] == category]
-    
-    # Search by query
-    if query:
-        query = query.lower()
-        search_results = []
-        for manual in filtered_manuals:
-            # Search in title, tags, and content
-            if (query in manual['title'].lower() or
-                any(query in tag.lower() for tag in manual['tags']) or
-                query in manual['content'].lower()):
-                search_results.append(manual)
-        filtered_manuals = search_results
-    
-    return filtered_manuals
+    try:
+        # Start with base query
+        base_query = db_session.query(Manual)
+        
+        # Filter by category
+        if category != "All":
+            base_query = base_query.filter(Manual.category == category)
+        
+        # Search by query
+        if query:
+            query_lower = query.lower()
+            base_query = base_query.filter(
+                (Manual.title.ilike(f'%{query_lower}%')) |
+                (Manual.content.ilike(f'%{query_lower}%')) |
+                (Manual.tags.ilike(f'%{query_lower}%'))
+            )
+        
+        # Get results and convert to dictionaries
+        manuals = base_query.all()
+        manual_dicts = []
+        
+        for manual in manuals:
+            manual_dict = {
+                'id': manual.id,
+                'title': manual.title,
+                'category': manual.category,
+                'tags': json.loads(manual.tags) if manual.tags else [],
+                'content': manual.content,
+                'file_data': manual.file_data,
+                'file_type': manual.file_type,
+                'filename': manual.filename,
+                'upload_date': manual.upload_date.strftime("%Y-%m-%d %H:%M"),
+                'size': manual.size,
+                'source_url': manual.source_url,
+                'search_query': manual.search_query
+            }
+            manual_dicts.append(manual_dict)
+        
+        return manual_dicts
+    except Exception as e:
+        st.error(f"Error searching manuals: {str(e)}")
+        return []
 
 def display_manual_card(manual):
     """Display a manual as a card"""
@@ -249,12 +346,12 @@ def display_manual_card(manual):
                 st.rerun()
         
         with col3:
-            # Download button (only for uploaded files)
+            # Download button
             if manual.get('file_data'):
-                file_data = decode_base64_to_file(manual['file_data'], manual['filename'])
+                # For uploaded files with binary data
                 st.download_button(
                     label="📥 Download",
-                    data=file_data.getvalue(),
+                    data=manual['file_data'],
                     file_name=manual['filename'],
                     mime="application/pdf" if manual['file_type'] == "pdf" else "text/plain",
                     key=f"download_{manual['id']}"
@@ -456,9 +553,10 @@ def main():
             )
             st.session_state.selected_category = selected_category
         
-        # Display manual count
-        total_manuals = len(st.session_state.manuals)
+        # Get manuals from database
         filtered_manuals = search_manuals(search_query, selected_category)
+        all_manuals = search_manuals("", "All")  # Get all manuals for count
+        total_manuals = len(all_manuals)
         
         if total_manuals == 0:
             st.info("📭 No manuals uploaded yet. Use the 'Add Manual' tab to get started!")
@@ -490,13 +588,21 @@ def main():
                     display_manual_card(manual)
         
         # Clear all data option (for development/testing)
-        if st.session_state.manuals:
+        if total_manuals > 0:
             with st.expander("⚙️ Advanced Options"):
                 if st.button("🗑️ Clear All Manuals", type="secondary"):
                     if st.checkbox("I confirm I want to delete all manuals"):
-                        st.session_state.manuals = []
-                        st.success("All manuals cleared!")
-                        st.rerun()
+                        try:
+                            if db_session:
+                                db_session.query(Manual).delete()
+                                db_session.commit()
+                                st.success("All manuals cleared!")
+                                st.rerun()
+                            else:
+                                st.error("Database connection not available")
+                        except Exception as e:
+                            st.error(f"Error clearing manuals: {str(e)}")
+                            db_session.rollback()
 
 if __name__ == "__main__":
     main()
