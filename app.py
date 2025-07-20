@@ -154,10 +154,23 @@ def check_qr_availability():
             import numpy as np
             from PIL import Image
             from pyzbar import pyzbar
+            
+            # Test if pyzbar actually works (zbar library check)
+            test_array = np.zeros((10, 10, 3), dtype=np.uint8)
+            pyzbar.decode(test_array)  # This will fail if zbar is missing
             QR_AVAILABLE = True
-        except ImportError:
+        except (ImportError, Exception):
             QR_AVAILABLE = False
     return QR_AVAILABLE
+
+def check_qr_generation_only():
+    """Check if QR generation (without scanning) is available"""
+    try:
+        import qrcode
+        from PIL import Image
+        return True
+    except ImportError:
+        return False
 
 def generate_qr_code(data, size=200):
     """Generate QR code for given data"""
@@ -1041,8 +1054,11 @@ def main():
         st.header("📱 QR Code Scanner")
         st.caption("Scan QR codes to automatically find product manuals")
         
-        # Check QR availability first
-        if not check_qr_availability():
+        # Check QR availability 
+        qr_scanning_available = check_qr_availability()
+        qr_generation_available = check_qr_generation_only()
+        
+        if not qr_scanning_available and not qr_generation_available:
             st.error("🚫 QR Code functionality is not available")
             st.info("💡 QR functionality requires additional system libraries that aren't currently installed.")
             st.markdown("""
@@ -1052,13 +1068,21 @@ def main():
             - Try scanning QR codes with your phone and typing the result into Auto-Find
             """)
         else:
+            # Show available QR options based on what's working
+            if qr_scanning_available:
+                qr_options = ["📷 Upload QR Image", "🔗 Generate QR for Manual"]
+            else:
+                st.warning("📷 QR code scanning is not available (missing system library), but QR generation works!")
+                st.info("💡 **Alternative for QR scanning:** Use your phone's camera app to scan QR codes, then copy the text into the Auto-Find Manual tab to search for manuals.")
+                qr_options = ["🔗 Generate QR for Manual"]
+            
             qr_method = st.radio(
-                "Choose scanning method:",
-                ["📷 Upload QR Image", "🔗 Generate QR for Manual"],
+                "Choose QR method:",
+                qr_options,
                 horizontal=True
             )
             
-            if qr_method == "📷 Upload QR Image":
+            if qr_method == "📷 Upload QR Image" and qr_scanning_available:
                 st.subheader("📷 Upload QR Code Image")
                 
                 uploaded_qr = st.file_uploader(
